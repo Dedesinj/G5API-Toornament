@@ -17,6 +17,13 @@ import { RowDataPacket } from "mysql2";
 import { SeasonObject } from "../types/seasons/SeasonObject.js";
 import { SeasonCvarObject } from "../types/seasons/SeasonCvarObject.js";
 
+
+import { ToornamentTournament } from "../types/toornament/ToornamentTournament.js";
+import { ToornamentParticipant } from "../types/toornament/ToornamentParticipant.js";
+import { ToornamentTokenResponse } from "../types/toornament/ToornamentTokenResponse.js";
+
+import config from "config";
+
 /**
  * @swagger
  *
@@ -611,11 +618,22 @@ router.delete("/", async (req, res, next) => {
  */
 router.post("/challonge", Utils.ensureAuthenticated, async (req, res, next) => {
   try {
+
+    const rawTournamentId: string = req.body[0].tournament_id;
+
+    if (rawTournamentId.startsWith("t:")) {
+      console.log("Toornament id : ",rawTournamentId)
+      const result = await handleToornamentImport(rawTournamentId, req.user!.id, req.body[0]);
+      return res.json(result);
+    }
+
+
     const userInfo: RowDataPacket[] = await db.query("SELECT challonge_api_key FROM user WHERE id = ?", [req.user!.id]);
     let challongeAPIKey: string | undefined | null = Utils.decrypt(userInfo[0].challonge_api_key);
     if (!challongeAPIKey) {
       throw "No challonge API key provided for user.";
     }
+
     let tournamentId: string = req.body[0].tournament_id;
     let challongeResponse: any = await fetch(
       "https://api.challonge.com/v1/tournaments/" +
@@ -623,6 +641,7 @@ router.post("/challonge", Utils.ensureAuthenticated, async (req, res, next) => {
       ".json?api_key=" +
       challongeAPIKey +
       "&include_participants=1");
+
     let challongeData = await challongeResponse.json()
     if (challongeData) {
       // Insert the season.
@@ -650,6 +669,10 @@ router.post("/challonge", Utils.ensureAuthenticated, async (req, res, next) => {
         });
         await db.query(sqlString, [teamArray]);
       }
+
+
+
+      
       res.json({
         message: "Challonge season imported successfully!",
         chal_res: challongeData.tournament.created_at,
@@ -664,5 +687,112 @@ router.post("/challonge", Utils.ensureAuthenticated, async (req, res, next) => {
     res.status(500).json({ message: (err as Error).toString() });
   }
 });
+
+
+async function handleToornamentImport(tournamentId: string, userId: number, reqBody: any) {
+
+  const clientId: string = config.get("toornament.clientId") || '';
+  const clientSecret: string = config.get("toornament.clientSecret") || '';
+  const apiKey: string = config.get("toornament.apiKey") || '';
+
+  if (!clientId || !clientSecret || !apiKey) {
+    throw new Error("Missing Toornament credentials in environment variables");
+  }
+
+
+  const tokenResponse = await fetch("https://api.toornament.com/oauth/v2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: clientId,
+      client_secret: clientSecret,
+      scope: 'organizer:admin organizer:view organizer:result organizer:participant'
+    }),
+  });
+
+  const tokenData = await tokenResponse.json() as ToornamentTokenResponse;
+  if (!tokenData.access_token) throw new Error("Toornament Auth Failed");
+
+  const cleanId = tournamentId.replace(/^t:/, '');
+  
+  const toornamentResponse = await fetch(
+    `https://api.toornament.com/organizer/v2/tournaments/${cleanId}`,
+    {
+      headers: {
+        "Authorization": `Bearer ${tokenData.access_token}`,
+        "x-api-key": apiKey 
+      }
+    }
+  );
+
+  const tournamentData = await toornamentResponse.json() as ToornamentTournament;
+
+  const logoUrl = tournamentData.logo ? tournamentData.logo.logo_medium : null;
+  
+  let sqlString = "INSERT INTO season SET ?";
+  let seasonData = {
+    user_id: userId,
+    name: tournamentData.name,
+    start_date: new Date(tournamentData.scheduled_date_start), 
+    is_challonge: true, 
+    challonge_url: tournamentId ,
+    challonge_svg : logoUrl
+  };
+  
+  const insertSeason: any = await db.query(sqlString, seasonData);
+
+  if (reqBody?.import_teams) {
+  let allParticipants: ToornamentParticipant[] = [];
+  let rangeStart = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const participantsResponse = await fetch(
+      `https://api.toornament.com/organizer/v2/participants?tournament_ids=${cleanId}`,
+      {
+        headers: {
+          "Authorization": `Bearer ${tokenData.access_token}`,
+          "x-api-key": apiKey,
+          "Range": `participants=${rangeStart}-${rangeStart + 49}`
+        }
+      }
+    );
+
+    const data = await participantsResponse.json() as ToornamentParticipant[];
+    allParticipants = allParticipants.concat(data);
+
+    const contentRange = participantsResponse.headers.get("Content-Range");
+    if (contentRange) {
+      const [range, total] = contentRange.split("/");
+      if (allParticipants.length >= parseInt(total)) {
+        hasMore = false;
+      } else {
+        rangeStart += 50;
+      }
+    } else {
+      hasMore = false;
+    }
+  }
+
+  if (allParticipants.length > 0) {
+    const sqlTeams = "INSERT INTO team (user_id, name, tag, challonge_team_id) VALUES ?";
+    const teamArray = allParticipants.map(p => [
+      userId,
+      p.name.substring(0, 40),
+      p.name.substring(0, 40),
+      p.id 
+    ]);
+
+    await db.query(sqlTeams, [teamArray]);
+    console.log(`${allParticipants.length} participants importés.`);
+  }
+}
+  
+  return {
+    message: "Toornament season imported successfully!",
+    id: insertSeason.insertId,
+  };
+}
 
 export default router;

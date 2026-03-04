@@ -164,7 +164,7 @@ class MapFlowService {
       if (error instanceof Error)
         return res.status(500).send({ message: error.message });
       else return res.status(500).send({ message: error });
-      
+
     }
   }
 
@@ -293,7 +293,7 @@ class MapFlowService {
         );
       }
       GlobalEmitter.emit("playerStatsUpdate");
-      
+
       // Update map stats. Grab season info
       sqlString = "UPDATE map_stats SET ? WHERE id = ?";
       insUpdStatement = {
@@ -304,7 +304,8 @@ class MapFlowService {
       // Update Challonge info if needed.
       sqlString = "SELECT max_maps, season_id FROM `match` WHERE id = ?";
       matchSeasonInfo = await db.query(sqlString, [event.matchid]);
-      if (matchSeasonInfo[0]?.season_id && matchSeasonInfo[0].max_maps == 1) {
+      //if (matchSeasonInfo[0]?.season_id && matchSeasonInfo[0].max_maps == 1) {
+      if (matchSeasonInfo[0]?.season_id) {
         await update_challonge_match(
           event.matchid,
           matchSeasonInfo[0].season_id,
@@ -324,7 +325,7 @@ class MapFlowService {
     }
   }
 
-  
+
 
   /**
    * Updates the database and emits playerStatsUpdate when a round has been restored and the match has started again.
