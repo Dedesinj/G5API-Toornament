@@ -81,7 +81,7 @@ export default
     const matches = await toornamentResponse.json() as ToornamentMatch[];
 
     const targetMatch = matches.find(match => {
-        const participants = match.opponents.map((opp: any) => opp.participant.id);
+        const participants = match.opponents.map((opp: any) => opp.participant?.id);
         return participants.includes(team1Id) && participants.includes(team2Id);
     });
 
@@ -218,8 +218,19 @@ export default
     const sqlMatchInfo: string = "SELECT veto_mappool FROM `match` WHERE id = ?";
     const matchInfo: RowDataPacket[] = await db.query(sqlMatchInfo, [match_id]);
 
-    if (matchInfo[0]?.veto_mappool) {
-        const mapsPlanned = matchInfo[0].veto_mappool.trim().split(/\s+/);
+    let mapsPlanned: string[] = [];
+    const rawMappool = matchInfo[0]?.veto_mappool?.trim();
+
+    const sqlVetoPicks = "SELECT map FROM veto WHERE match_id = ? AND pick_or_veto = 'pick' ORDER BY id";
+    const vetoPicks: RowDataPacket[] = await db.query(sqlVetoPicks, [match_id]);
+
+    if (vetoPicks.length > 0) {
+        mapsPlanned = vetoPicks.map(v => v.map);
+    } else if (rawMappool) {
+        mapsPlanned = rawMappool.split(/\s+/);
+    }
+
+    if (mapsPlanned.length > 0) {
 
         for (let i = 0; i < mapsPlanned.length; i++) {
             const gameNumber = i + 1;

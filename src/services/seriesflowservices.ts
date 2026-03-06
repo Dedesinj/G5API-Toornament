@@ -175,8 +175,8 @@ class SeriesFlowService {
         await update_challonge_match(
           event.matchid,
           matchInfo[0].season_id,
-          matchInfo[0].team1_id,
-          matchInfo[0].team2_id,
+          +event.team1.id,
+          +event.team2.id,
           matchInfo[0].max_maps,
           event.winner.team
         );
